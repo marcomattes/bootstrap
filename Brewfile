@@ -27,14 +27,13 @@ brew "lynx"
 brew "maven"
 brew "tree"
 brew "yadm"
-brew 'unrar'
 brew 'rsync'
 
 brew "zsh"
 brew "zsh-completions"
 
 cask "adobe-acrobat-reader"
-cask 'bitwarden'
+cask "bitwarden"
 cask "intune-company-portal"
 cask "eul"
 cask "mattermost"
