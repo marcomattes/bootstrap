@@ -10,6 +10,13 @@ trap 'echo_error "Failed at line $LINENO"; exit 1' ERR
 export HOMEBREW_CASK_OPTS="--appdir=/Applications"
 export HOMEBREW_NO_ANALYTICS=1
 
+# ---------- Sudo bootstrap (ask once, keep alive) ----------
+if ! sudo -v; then
+  echo_error "Sudo required to apply system-wide settings."
+  exit 1
+fi
+( while true; do sudo -n true; sleep 60; kill -0 "$" || exit; done ) 2>/dev/null &
+
 # ---------- Xcode CLI Tools: install-and-wait ----------
 ensure_xcode_clt() {
   if xcode-select -p &>/dev/null; then
@@ -35,7 +42,7 @@ ensure_xcode_clt() {
       break
     fi
     if (( elapsed >= timeout_sec )); then
-      echo_error "Timed out waiting for Xcode Command Line Tools. Please finish the installer and re-run."
+      echo_error "Timed out waiting for Xcode Command Line Tools."
       exit 1
     fi
     echo_warn "Waiting for CLT installation to complete... (${elapsed}s)"
@@ -50,7 +57,12 @@ if ! command -v brew &>/dev/null; then
   echo_warn "Installing Homebrew (Apple Silicon)..."
   /bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)"
 fi
-eval "$(/opt/homebrew/bin/brew shellenv)"   # ensure brew in PATH
+# runtime PATH
+eval "$(/opt/homebrew/bin/brew shellenv)"
+# persistent PATH for future shells
+if ! grep -q 'brew shellenv' "$HOME/.zprofile" 2>/dev/null; then
+  echo 'eval "$(/opt/homebrew/bin/brew shellenv)"' >> "$HOME/.zprofile"
+fi
 
 echo_ok "Homebrew present. Updating & health check..."
 brew update
@@ -61,27 +73,22 @@ install_casks() { brew install --cask "$@" || true; }
 
 # ---------- Packages ----------
 PACKAGES=(
-  curl
-  git
-  htop
-  node
-  openssl
-  python
-  ssh-copy-id
-  tree
-  wget
-  zsh
-  yadm
-  # Dev toolchain
+  # basics
+  curl git htop node openssl python ssh-copy-id tree wget zsh yadm
+  # cli tooling
+  jq yq ripgrep fd bat fzf direnv
   gnupg pinentry-mac
   gh
+  # k8s & IaC
+  kubectl kubectx k9s helm
+  terraform tflint
 )
 echo_ok "Installing/upgrading brew packages..."
 install_brews "${PACKAGES[@]}"
 echo_ok "Cleaning up brew cache..."
 brew cleanup -s || true
 
-# Enable fzf keybindings and completion
+# fzf keybindings/completion
 "$(brew --prefix)/opt/fzf/install" --key-bindings --completion --no-update-rc 2>/dev/null || true
 
 # ---------- Casks ----------
@@ -99,20 +106,19 @@ CASKS=(
   microsoft-teams
   visual-studio-code
   vlc
-  keepassxc           # KeePass added
+  keepassxc
 )
 echo_ok "Installing cask apps..."
 install_casks "${CASKS[@]}"
 
-# ---------- Nerd Fonts ----------
+# ---------- Nerd Fonts (no deprecated tap) ----------
 echo_ok "Installing Nerd Fonts..."
-brew tap homebrew/cask-fonts || true
-FONTS=(
+NERD_FONTS=(
   font-fira-code-nerd-font
   font-jetbrains-mono-nerd-font
   font-hack-nerd-font
 )
-install_casks "${FONTS[@]}"
+install_casks "${NERD_FONTS[@]}"
 
 # ---------- Oh My Zsh ----------
 if [[ ! -f "$HOME/.zshrc" ]]; then
@@ -124,51 +130,24 @@ if [[ ! -f "$HOME/.zshrc" ]]; then
 fi
 
 # ---------- Shell completions ----------
-ZSH_COMPLETIONS_DIR="${ZSH_CUSTOM:-$HOME/.oh-my-zsh/custom}/plugins"
-mkdir -p "$ZSH_COMPLETIONS_DIR" "$HOME/.zfunc"
-
-# Brew provides many completions under $(brew --prefix)/share
 BREW_PREFIX="$(brew --prefix)"
 {
   echo ''
-  echo '# ----- Completions -----'
+  echo '# ----- Completions & bindings -----'
   echo "fpath+=($BREW_PREFIX/share/zsh/site-functions)"
   echo "autoload -Uz compinit && compinit -u"
-  echo ''
-  echo '# fzf keybindings (installed via brew fzf)'
   echo "[ -f $BREW_PREFIX/opt/fzf/shell/key-bindings.zsh ] && source $BREW_PREFIX/opt/fzf/shell/key-bindings.zsh"
   echo "[ -f $BREW_PREFIX/opt/fzf/shell/completion.zsh ] && source $BREW_PREFIX/opt/fzf/shell/completion.zsh"
-  echo ''
-  echo '# direnv'
   echo 'eval "$(direnv hook zsh)"'
-  echo ''
-  echo '# kubectl completion'
-  echo 'autoload -Uz compinit'
-  echo 'if command -v kubectl >/dev/null; then'
-  echo '  source <(kubectl completion zsh)'
-  echo 'fi'
-  echo ''
-  echo '# helm completion'
-  echo 'if command -v helm >/dev/null; then'
-  echo '  source <(helm completion zsh)'
-  echo 'fi'
-  echo ''
-  echo '# gh completion'
-  echo 'if command -v gh >/dev/null; then'
-  echo '  eval "$(gh completion -s zsh)"'
-  echo 'fi'
-  echo ''
-  echo '# terraform completion'
-  echo 'if command -v terraform >/dev/null; then'
-  echo '  complete -o nospace -C terraform terraform 2>/dev/null || true'
-  echo 'fi'
+  echo 'if command -v kubectl >/dev/null; then source <(kubectl completion zsh); fi'
+  echo 'if command -v helm >/dev/null; then source <(helm completion zsh); fi'
+  echo 'if command -v gh >/dev/null; then eval "$(gh completion -s zsh)"; fi'
+  echo 'if command -v terraform >/dev/null; then complete -o nospace -C terraform terraform 2>/dev/null || true; fi'
 } >> "$HOME/.zshrc"
 
-# Prefer zsh as default shell
+# Ensure default shell
 if [[ "$SHELL" != "/bin/zsh" ]]; then
-  if command -v chsh &>/dev/null; then
-    chsh -s /bin/zsh || echo_warn "Failed to set zsh as default shell."
-  fi
+  chsh -s /bin/zsh || echo_warn "Failed to set zsh as default shell."
 fi
 
 # ---------- Git Identity ----------
@@ -186,29 +165,19 @@ git config --global core.editor "${VISUAL:-${EDITOR:-nano}}"
 git config --global credential.helper osxkeychain || true
 git config --global init.defaultBranch main
 git config --global gpg.program "$(brew --prefix)/bin/gpg" || true
-git config --global commit.gpgsign false || true  # set true if you enforce signing
+git config --global commit.gpgsign false || true
 
 # ---------- SSH Key & Config ----------
 if [[ ! -f "${HOME}/.ssh/id_ed25519" ]]; then
   mkdir -p "${HOME}/.ssh"
   chmod 700 "${HOME}/.ssh"
-
   echo_ok "Generating ed25519 SSH key..."
   ssh-keygen -t ed25519 -C "${git_email}" -f "${HOME}/.ssh/id_ed25519" -N ""
-
   eval "$(ssh-agent -s)"
-  if ssh-add --apple-use-keychain "${HOME}/.ssh/id_ed25519"; then
-    :
-  else
-    ssh-add "${HOME}/.ssh/id_ed25519"
-  fi
-
+  ssh-add --apple-use-keychain "${HOME}/.ssh/id_ed25519" || ssh-add "${HOME}/.ssh/id_ed25519"
   pbcopy < "${HOME}/.ssh/id_ed25519.pub"
-  echo_ok "SSH public key copied to clipboard. Add it to GitHub:"
-  echo "https://github.com/settings/keys"
-  echo "----- PUBLIC KEY -----"
+  echo_ok "SSH public key copied to clipboard. Add it to GitHub: https://github.com/settings/keys"
   cat "${HOME}/.ssh/id_ed25519.pub"
-  echo "----------------------"
 fi
 
 SSH_CFG="${HOME}/.ssh/config"
@@ -222,7 +191,6 @@ Host github.com
 EOF
   chmod 600 "$SSH_CFG"
 fi
-
 echo_ok "Git/SSH setup complete for ${git_name} <${git_email}>."
 
 # ---------- VS Code Extensions ----------
@@ -243,40 +211,35 @@ if command -v code &>/dev/null; then
 fi
 
 # ---------- Docker Desktop defaults ----------
-# Make sure Docker Desktop is installed (cask above) before writing defaults; safe even if not yet launched
-# Keys may evolve; these are sane defaults commonly used in teams.
 echo_ok "Applying Docker Desktop defaults..."
-# Send anonymous analytics off (if key exists)
+# analytics off, autostart on
 defaults write com.docker.docker AnalyticsEnabled -bool false || true
-# Auto-start at login
 defaults write com.docker.docker autoStart -bool true || true
-# Resource limits (example: 4 CPUs, 6 GB RAM, 1 GB swap) – adjust to your policy
+# resources (adjust to policy)
 defaults write com.docker.docker CPULimit -int 4 || true
 defaults write com.docker.docker MemoryMiB -int 6144 || true
 defaults write com.docker.docker SwapMiB -int 1024 || true
-# Use Docker Compose V2
+# compose v2, k8s off by default
 defaults write com.docker.docker UseDockerComposeV2 -bool true || true
-# Enable Kubernetes off by default (toggle to true if you want it)
 defaults write com.docker.docker KubernetesEnabled -bool false || true
 
 # ---------- macOS Defaults ----------
 echo_ok "Configuring macOS defaults..."
 
-# Faster key repeat and shorter delay
+# Keyboard repeat
 defaults write NSGlobalDomain KeyRepeat -int 6
 defaults write NSGlobalDomain InitialKeyRepeat -int 25
-
-# Disable press-and-hold in favor of key repeat (requested)
+# Prefer key repeat over press-and-hold
 defaults write -g ApplePressAndHoldEnabled -bool false
 
-# Always show scrollbars
+# Scrollbars always visible
 defaults write NSGlobalDomain AppleShowScrollBars -string "Always"
 
-# Require password immediately after screensaver/sleep
+# Require password after sleep/screensaver
 defaults write com.apple.screensaver askForPassword -int 1
 defaults write com.apple.screensaver askForPasswordDelay -int 0
 
-# Show file extensions and hidden files in Finder
+# Show extensions and hidden files
 defaults write NSGlobalDomain AppleShowAllExtensions -bool true
 defaults write com.apple.finder AppleShowAllFiles -bool true
 
@@ -286,7 +249,7 @@ defaults write NSGlobalDomain NSNavPanelExpandedStateForSaveMode2 -bool true
 defaults write NSGlobalDomain PMPrintingExpandedStateForPrint -bool true
 defaults write NSGlobalDomain PMPrintingExpandedStateForPrint2 -bool true
 
-# Tap-to-click; classic scroll direction
+# Trackpad tap-to-click; classic scroll
 defaults write com.apple.driver.AppleBluetoothMultitouch.trackpad Clicking -bool true
 defaults -currentHost write NSGlobalDomain com.apple.mouse.tapBehavior -int 1
 defaults write NSGlobalDomain com.apple.swipescrolldirection -bool false
@@ -294,62 +257,47 @@ defaults write NSGlobalDomain com.apple.swipescrolldirection -bool false
 # Disk Utility advanced
 defaults write com.apple.DiskUtility advanced-image-options -int 1
 
-# UI highlight color, icon size in lists, faster window animations
+# UI tweaks
 defaults write NSGlobalDomain AppleHighlightColor -string "0.764700 0.976500 0.568600"
 defaults write NSGlobalDomain NSTableViewDefaultSizeMode -int 3
 defaults write NSGlobalDomain NSAutomaticWindowAnimationsEnabled -bool false
-
-# Default to saving locally
 defaults write NSGlobalDomain NSDocumentSaveNewDocumentsToCloud -bool false
 
-# Screenshots folder and format
+# Screenshots
 mkdir -p "${HOME}/Desktop/Screenshots"
 defaults write com.apple.screencapture location -string "${HOME}/Desktop/Screenshots"
 defaults write com.apple.screencapture type -string "png"
 
-# Finder: allow quit, disable animations
+# Finder basics
 defaults write com.apple.finder QuitMenuItem -bool true
 defaults write com.apple.finder DisableAllAnimations -bool true
-
-# Finder: default new window target = Desktop
 defaults write com.apple.finder NewWindowTarget -string "PfDe"
 defaults write com.apple.finder NewWindowTargetPath -string "file://${HOME}/Desktop/"
-
-# Finder: desktop icon clutter off
 defaults write com.apple.finder ShowExternalHardDrivesOnDesktop -bool false
 defaults write com.apple.finder ShowHardDrivesOnDesktop -bool false
 defaults write com.apple.finder ShowMountedServersOnDesktop -bool false
 defaults write com.apple.finder ShowRemovableMediaOnDesktop -bool false
-
-# Finder: status & path bar
 defaults write com.apple.finder ShowStatusBar -bool true
 defaults write com.apple.finder ShowPathbar -bool true
-
-# QuickLook text selection, POSIX path in title
 defaults write com.apple.finder QLEnableTextSelection -bool true
 defaults write com.apple.finder _FXShowPosixPathInTitle -bool true
-
-# Finder: search current folder
 defaults write com.apple.finder FXDefaultSearchScope -string "SCcf"
-
-# Finder: stop warning on extension change
 defaults write com.apple.finder FXEnableExtensionChangeWarning -bool false
 
-# Finder: default view = Columns, sort by name, show item info on icons
-defaults write com.apple.finder FXPreferredViewStyle -string "clmv"   # clmv=Column view
-defaults write com.apple.finder FXArrangeGroupViewBy -string "Name"   # sort by Name in group views
-defaults write com.apple.finder _FXSortFoldersFirst -bool true        # folders first in sorting
-# Show item info near icons (for icon views)
+# Finder: default view Columns, sort by name, show item info
+defaults write com.apple.finder FXPreferredViewStyle -string "clmv"
+defaults write com.apple.finder FXArrangeGroupViewBy -string "Name"
+defaults write com.apple.finder _FXSortFoldersFirst -bool true
 defaults write com.apple.finder ShowItemInfo -bool true
 
 # Spring-loading folders
 defaults write NSGlobalDomain com.apple.springing.enabled -bool true
 defaults write NSGlobalDomain com.apple.springing.delay -float 0
 
-# Avoid .DS_Store on network shares
+# .DS_Store off on network shares
 defaults write com.apple.desktopservices DSDontWriteNetworkStores -bool true
 
-# Disk image handling
+# Disk images
 defaults write com.apple.frameworks.diskimages skip-verify -bool true
 defaults write com.apple.frameworks.diskimages skip-verify-locked -bool true
 defaults write com.apple.frameworks.diskimages skip-verify-remote -bool true
@@ -357,15 +305,13 @@ defaults write com.apple.frameworks.diskimages auto-open-ro-root -bool true
 defaults write com.apple.frameworks.diskimages auto-open-rw-root -bool true
 defaults write com.apple.finder OpenWindowForNewRemovableDisk -bool true
 
-# Dock cleanup: autohide, size, minimize effect
-defaults write com.apple.dock autohide -bool true            # auto-hide Dock
-defaults write com.apple.dock tilesize -int 48               # Dock icon size (pixels)
-defaults write com.apple.dock mineffect -string "scale"      # minimize effect: 'scale' or 'genie'
-defaults write com.apple.dock show-recents -bool false       # hide recent apps
-
-# Hot Corners (tl=0, tr=2, bl=3, br=4 examples)
-# 0: no-op, 2: Mission Control, 3: Show Application Windows, 4: Desktop, 5: Start screen saver, 6: Disable screen saver, 10: Put display to sleep
-# Configure: top-left -> Mission Control, top-right -> Desktop, bottom-left -> Start screensaver, bottom-right -> Show Application Windows
+# Dock cleanup + Hot Corners
+defaults write com.apple.dock autohide -bool true
+defaults write com.apple.dock tilesize -int 48
+defaults write com.apple.dock mineffect -string "scale"
+defaults write com.apple.dock show-recents -bool false
+# Hot Corners:
+# TL=Mission Control(2), TR=Desktop(4), BL=Start screensaver(5), BR=App Windows(3)
 defaults write com.apple.dock wvous-tl-corner -int 2; defaults write com.apple.dock wvous-tl-modifier -int 0
 defaults write com.apple.dock wvous-tr-corner -int 4; defaults write com.apple.dock wvous-tr-modifier -int 0
 defaults write com.apple.dock wvous-bl-corner -int 5; defaults write com.apple.dock wvous-bl-modifier -int 0
@@ -374,7 +320,7 @@ defaults write com.apple.dock wvous-br-corner -int 3; defaults write com.apple.d
 # Show ~/Library
 chflags nohidden "$HOME/Library" || true
 
-# Expand “Get Info” panes: General, Open with, Sharing & Permissions
+# Expand Get Info panes
 defaults write com.apple.finder FXInfoPanesExpanded -dict \
   General -bool true \
   OpenWith -bool true \
@@ -385,20 +331,15 @@ killall Finder 2>/dev/null || true
 killall Dock 2>/dev/null || true
 killall SystemUIServer 2>/dev/null || true
 
-# ---------- System-wide (sudo) ----------
-if sudo -n true 2>/dev/null; then
-  defaults write com.apple.SoftwareUpdate AutomaticCheckEnabled -bool true || true
-  sudo defaults write /Library/Preferences/com.apple.loginwindow AdminHostInfo HostName || true
-  sudo systemsetup -setrestartfreeze on || echo_warn "systemsetup unavailable."
-else
-  echo_warn "No sudo without password. Skipping system-wide settings."
-fi
+# ---------- System-wide ----------
+# Software Update preferences and loginwindow host info
+defaults write com.apple.SoftwareUpdate AutomaticCheckEnabled -bool true || true
+sudo defaults write /Library/Preferences/com.apple.loginwindow AdminHostInfo HostName || true
+sudo systemsetup -setrestartfreeze on || echo_warn "systemsetup unavailable."
 
 # ---------- Software Update ----------
-if sudo -n true 2>/dev/null; then
-  echo_ok "Running macOS Software Updates..."
-  sudo softwareupdate -ia || echo_warn "softwareupdate failed/was interrupted."
-fi
+echo_ok "Running macOS Software Updates..."
+sudo softwareupdate -ia || echo_warn "softwareupdate failed/was interrupted."
 
 # ---------- Folders ----------
 echo_ok "Creating folder structure..."
