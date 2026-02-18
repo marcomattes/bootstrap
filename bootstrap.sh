@@ -161,6 +161,74 @@ git config --global init.defaultBranch main
 git config --global gpg.program "$(brew --prefix)/bin/gpg" || true
 git config --global commit.gpgsign false || true
 
+# ---------- GnuPG Setup ----------
+echo_ok "Configuring GnuPG..."
+mkdir -p "${HOME}/.gnupg"
+chmod 700 "${HOME}/.gnupg"
+
+# gpg-agent config
+cat > "${HOME}/.gnupg/gpg-agent.conf" <<'EOF'
+pinentry-program /usr/local/bin/pinentry-mac
+enable-ssh-support
+default-cache-ttl 600
+max-cache-ttl 7200
+EOF
+
+# Adjust pinentry path for Apple Silicon brew prefix if needed
+if [[ ! -x /usr/local/bin/pinentry-mac ]] && [[ -x "$(brew --prefix)/bin/pinentry-mac" ]]; then
+  sed -i '' "s|/usr/local/bin/pinentry-mac|$(brew --prefix)/bin/pinentry-mac|" "${HOME}/.gnupg/gpg-agent.conf"
+fi
+
+# gpg.conf with sane defaults
+cat > "${HOME}/.gnupg/gpg.conf" <<'EOF'
+use-agent
+expert
+no-emit-version
+keyid-format 0xlong
+personal-digest-preferences SHA512 SHA384 SHA256 SHA224
+cert-digest-algo SHA512
+default-preference-list SHA512 SHA384 SHA256 SHA224 AES256 AES192 AES ZLIB BZIP2 ZIP Uncompressed
+EOF
+
+# zsh integration for GPG TTY
+if ! grep -q 'GPG_TTY' "$HOME/.zshrc" 2>/dev/null; then
+  {
+    echo ''
+    echo '# ----- GPG -----'
+    echo 'export GPG_TTY=$(tty)'
+    echo 'gpgconf --kill gpg-agent >/dev/null 2>&1 || true'
+  } >> "$HOME/.zshrc"
+fi
+
+# Ensure agent picks up config in current session
+gpgconf --kill gpg-agent >/dev/null 2>&1 || true
+
+# optional: create key if none exists
+if ! gpg --list-secret-keys --keyid-format LONG >/dev/null 2>&1; then
+  echo_warn "No GPG secret keys found. Creating a new key (ed25519) non-interactively..."
+  cat > /tmp/gpg-batch.$ <<EOF
+%no-protection
+Key-Type: ed25519
+Key-Curve: ed25519
+Name-Real: ${git_name}
+Name-Email: ${git_email}
+Expire-Date: 0
+%commit
+EOF
+  gpg --batch --generate-key /tmp/gpg-batch.$ || echo_warn "Key generation failed or was canceled."
+  rm -f /tmp/gpg-batch.$
+fi
+
+# Set git signing key if available (but do not enforce signing)
+signing_key="$(gpg --list-secret-keys --keyid-format LONG 2>/dev/null | awk '/sec/{print $2} /\[S\]/{print $2}' | head -n1 || true)"
+if [[ -z "$signing_key" ]]; then
+  # Fallback parse
+  signing_key="$(gpg --list-secret-keys --keyid-format LONG 2>/dev/null | awk '/^sec/{print $2}' | sed -E 's/.*\/(0x[0-9A-F]+).*/\1/' | head -n1 || true)"
+fi
+if [[ -n "$signing_key" ]]; then
+  git config --global user.signingkey "$signing_key" || true
+fi
+
 # ---------- SSH Key & Config ----------
 if [[ ! -f "${HOME}/.ssh/id_ed25519" ]]; then
   mkdir -p "${HOME}/.ssh"
@@ -282,16 +350,16 @@ defaults write com.apple.frameworks.diskimages auto-open-ro-root -bool true
 defaults write com.apple.frameworks.diskimages auto-open-rw-root -bool true
 defaults write com.apple.finder OpenWindowForNewRemovableDisk -bool true
 
-# Dock + Hot Corners
-defaults write com.apple.dock autohide -bool true
+# Dock + Hot Corners (autohide disabled, hot corners off)
+defaults write com.apple.dock autohide -bool false
 defaults write com.apple.dock tilesize -int 48
 defaults write com.apple.dock mineffect -string "scale"
 defaults write com.apple.dock show-recents -bool false
-# TL=Mission Control(2), TR=Desktop(4), BL=Start screensaver(5), BR=App Windows(3)
-defaults write com.apple.dock wvous-tl-corner -int 2; defaults write com.apple.dock wvous-tl-modifier -int 0
-defaults write com.apple.dock wvous-tr-corner -int 4; defaults write com.apple.dock wvous-tr-modifier -int 0
-defaults write com.apple.dock wvous-bl-corner -int 5; defaults write com.apple.dock wvous-bl-modifier -int 0
-defaults write com.apple.dock wvous-br-corner -int 3; defaults write com.apple.dock wvous-br-modifier -int 0
+# Disable all Hot Corners (0 = no action)
+defaults write com.apple.dock wvous-tl-corner -int 0; defaults write com.apple.dock wvous-tl-modifier -int 0
+defaults write com.apple.dock wvous-tr-corner -int 0; defaults write com.apple.dock wvous-tr-modifier -int 0
+defaults write com.apple.dock wvous-bl-corner -int 0; defaults write com.apple.dock wvous-bl-modifier -int 0
+defaults write com.apple.dock wvous-br-corner -int 0; defaults write com.apple.dock wvous-br-modifier -int 0
 
 # Show ~/Library
 chflags nohidden "$HOME/Library" || true
@@ -321,3 +389,8 @@ echo_ok "Creating folder structure..."
 mkdir -p "$HOME/development"
 
 echo_ok "Bootstrapping complete"
+
+# ---------- Force Reboot ----------
+echo_warn "System will reboot in 5 seconds..."
+sleep 5
+sudo /sbin/shutdown -r now
