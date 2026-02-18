@@ -59,7 +59,7 @@ if ! command -v brew &>/dev/null; then
 fi
 # runtime PATH
 eval "$(/opt/homebrew/bin/brew shellenv)"
-# persistent PATH for future shells
+# persistent PATH
 if ! grep -q 'brew shellenv' "$HOME/.zprofile" 2>/dev/null; then
   echo 'eval "$(/opt/homebrew/bin/brew shellenv)"' >> "$HOME/.zprofile"
 fi
@@ -71,17 +71,14 @@ brew doctor || echo_warn "brew doctor reported notes."
 install_brews() { brew install "$@" && brew upgrade "$@" || true; }
 install_casks() { brew install --cask "$@" || true; }
 
-# ---------- Packages ----------
+# ---------- Packages (no DevOps/K8s) ----------
 PACKAGES=(
   # basics
   curl git htop node openssl python ssh-copy-id tree wget zsh yadm
-  # cli tooling
+  # developer-friendly CLI
   jq yq ripgrep fd bat fzf direnv
   gnupg pinentry-mac
   gh
-  # k8s & IaC
-  kubectl kubectx k9s helm
-  terraform tflint
 )
 echo_ok "Installing/upgrading brew packages..."
 install_brews "${PACKAGES[@]}"
@@ -139,10 +136,7 @@ BREW_PREFIX="$(brew --prefix)"
   echo "[ -f $BREW_PREFIX/opt/fzf/shell/key-bindings.zsh ] && source $BREW_PREFIX/opt/fzf/shell/key-bindings.zsh"
   echo "[ -f $BREW_PREFIX/opt/fzf/shell/completion.zsh ] && source $BREW_PREFIX/opt/fzf/shell/completion.zsh"
   echo 'eval "$(direnv hook zsh)"'
-  echo 'if command -v kubectl >/dev/null; then source <(kubectl completion zsh); fi'
-  echo 'if command -v helm >/dev/null; then source <(helm completion zsh); fi'
   echo 'if command -v gh >/dev/null; then eval "$(gh completion -s zsh)"; fi'
-  echo 'if command -v terraform >/dev/null; then complete -o nospace -C terraform terraform 2>/dev/null || true; fi'
 } >> "$HOME/.zshrc"
 
 # Ensure default shell
@@ -212,52 +206,36 @@ fi
 
 # ---------- Docker Desktop defaults ----------
 echo_ok "Applying Docker Desktop defaults..."
-# analytics off, autostart on
 defaults write com.docker.docker AnalyticsEnabled -bool false || true
 defaults write com.docker.docker autoStart -bool true || true
-# resources (adjust to policy)
 defaults write com.docker.docker CPULimit -int 4 || true
 defaults write com.docker.docker MemoryMiB -int 6144 || true
 defaults write com.docker.docker SwapMiB -int 1024 || true
-# compose v2, k8s off by default
 defaults write com.docker.docker UseDockerComposeV2 -bool true || true
 defaults write com.docker.docker KubernetesEnabled -bool false || true
 
 # ---------- macOS Defaults ----------
 echo_ok "Configuring macOS defaults..."
 
-# Keyboard repeat
+# Keyboard repeat + disable press-and-hold
 defaults write NSGlobalDomain KeyRepeat -int 6
 defaults write NSGlobalDomain InitialKeyRepeat -int 25
-# Prefer key repeat over press-and-hold
 defaults write -g ApplePressAndHoldEnabled -bool false
 
-# Scrollbars always visible
+# UI/UX basics
 defaults write NSGlobalDomain AppleShowScrollBars -string "Always"
-
-# Require password after sleep/screensaver
 defaults write com.apple.screensaver askForPassword -int 1
 defaults write com.apple.screensaver askForPasswordDelay -int 0
-
-# Show extensions and hidden files
 defaults write NSGlobalDomain AppleShowAllExtensions -bool true
 defaults write com.apple.finder AppleShowAllFiles -bool true
-
-# Expand Save/Open and Print dialogs
 defaults write NSGlobalDomain NSNavPanelExpandedStateForSaveMode -bool true
 defaults write NSGlobalDomain NSNavPanelExpandedStateForSaveMode2 -bool true
 defaults write NSGlobalDomain PMPrintingExpandedStateForPrint -bool true
 defaults write NSGlobalDomain PMPrintingExpandedStateForPrint2 -bool true
-
-# Trackpad tap-to-click; classic scroll
 defaults write com.apple.driver.AppleBluetoothMultitouch.trackpad Clicking -bool true
 defaults -currentHost write NSGlobalDomain com.apple.mouse.tapBehavior -int 1
 defaults write NSGlobalDomain com.apple.swipescrolldirection -bool false
-
-# Disk Utility advanced
 defaults write com.apple.DiskUtility advanced-image-options -int 1
-
-# UI tweaks
 defaults write NSGlobalDomain AppleHighlightColor -string "0.764700 0.976500 0.568600"
 defaults write NSGlobalDomain NSTableViewDefaultSizeMode -int 3
 defaults write NSGlobalDomain NSAutomaticWindowAnimationsEnabled -bool false
@@ -268,7 +246,7 @@ mkdir -p "${HOME}/Desktop/Screenshots"
 defaults write com.apple.screencapture location -string "${HOME}/Desktop/Screenshots"
 defaults write com.apple.screencapture type -string "png"
 
-# Finder basics
+# Finder
 defaults write com.apple.finder QuitMenuItem -bool true
 defaults write com.apple.finder DisableAllAnimations -bool true
 defaults write com.apple.finder NewWindowTarget -string "PfDe"
@@ -283,18 +261,17 @@ defaults write com.apple.finder QLEnableTextSelection -bool true
 defaults write com.apple.finder _FXShowPosixPathInTitle -bool true
 defaults write com.apple.finder FXDefaultSearchScope -string "SCcf"
 defaults write com.apple.finder FXEnableExtensionChangeWarning -bool false
-
-# Finder: default view Columns, sort by name, show item info
+# Default view: Columns, sort by name, show item info
 defaults write com.apple.finder FXPreferredViewStyle -string "clmv"
 defaults write com.apple.finder FXArrangeGroupViewBy -string "Name"
 defaults write com.apple.finder _FXSortFoldersFirst -bool true
 defaults write com.apple.finder ShowItemInfo -bool true
 
-# Spring-loading folders
+# Spring-loading
 defaults write NSGlobalDomain com.apple.springing.enabled -bool true
 defaults write NSGlobalDomain com.apple.springing.delay -float 0
 
-# .DS_Store off on network shares
+# Network shares cleaner
 defaults write com.apple.desktopservices DSDontWriteNetworkStores -bool true
 
 # Disk images
@@ -305,12 +282,11 @@ defaults write com.apple.frameworks.diskimages auto-open-ro-root -bool true
 defaults write com.apple.frameworks.diskimages auto-open-rw-root -bool true
 defaults write com.apple.finder OpenWindowForNewRemovableDisk -bool true
 
-# Dock cleanup + Hot Corners
+# Dock + Hot Corners
 defaults write com.apple.dock autohide -bool true
 defaults write com.apple.dock tilesize -int 48
 defaults write com.apple.dock mineffect -string "scale"
 defaults write com.apple.dock show-recents -bool false
-# Hot Corners:
 # TL=Mission Control(2), TR=Desktop(4), BL=Start screensaver(5), BR=App Windows(3)
 defaults write com.apple.dock wvous-tl-corner -int 2; defaults write com.apple.dock wvous-tl-modifier -int 0
 defaults write com.apple.dock wvous-tr-corner -int 4; defaults write com.apple.dock wvous-tr-modifier -int 0
@@ -332,7 +308,6 @@ killall Dock 2>/dev/null || true
 killall SystemUIServer 2>/dev/null || true
 
 # ---------- System-wide ----------
-# Software Update preferences and loginwindow host info
 defaults write com.apple.SoftwareUpdate AutomaticCheckEnabled -bool true || true
 sudo defaults write /Library/Preferences/com.apple.loginwindow AdminHostInfo HostName || true
 sudo systemsetup -setrestartfreeze on || echo_warn "systemsetup unavailable."
